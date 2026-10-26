@@ -90,11 +90,24 @@ function headerRe(p){
     .map(s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
   return new RegExp('^\\s*' + parts.join('.*') + '\\s*$', 'i');
 }
+const ABBR = {
+  'русский язык':'рус.яз','литература':'лит','литературное чтение':'лит.чт',
+  'математика':'мат','алгебра':'алг','геометрия':'геом','информатика':'инф',
+  'физика':'физ','химия':'хим','биология':'био','география':'гео','история':'ист',
+  'обществознание':'общ','английский язык':'англ.яз','немецкий язык':'нем.яз',
+  'французский язык':'фр.яз','технология':'техн','музыка':'муз',
+  'изобразительное искусство':'изо','физическая культура':'физ-ра','окружающий мир':'окр.мир'
+};
+function abbrev(s){
+  const t = s.replace(/_/g,' ').replace(/\s+/g,' ').trim().toLowerCase();
+  return ABBR[t] || t.split(' ').map(w => w.slice(0,3)).join('.');
+}
+// "Выписка+Информатика+9к_Иванов+..." -> "9к инф"; "Выписка+Литература+7_А+..." -> "7а лит"
 function classOf(name){
   const toks = name.replace(/\.xls[xm]?$/i,'').split('+');
-  for (const t of toks.slice(1)){
-    const m = t.split('_')[0].match(/^\s*(\d{1,2})\s*([A-Za-zА-Яа-яЁё])(?![A-Za-zА-Яа-яЁё0-9])/);
-    if (m) return m[1] + m[2].toUpperCase();
+  for (let i = 1; i < toks.length; i++){
+    const m = toks[i].match(/^\s*(\d{1,2})\s*_?\s*([A-Za-zА-Яа-яЁё])(?![A-Za-zА-Яа-яЁё0-9])/);
+    if (m) return m[1] + m[2].toLowerCase() + ' ' + abbrev(toks[1]);
   }
   return null;
 }
@@ -106,7 +119,7 @@ function grade(v){
   if (t === 'НАН' || t === 'НАУ') return 'НА';
   return null;
 }
-const clsKey = n => { const m = n.match(/^(\d+)(.*)$/); return m ? [+m[1], m[2]] : [999, n]; };
+const clsKey = n => { const m = n.match(/^(\d+)(\S*)\s*(.*)$/); return m ? [+m[1], m[2], m[3]] : [999, n, '']; };
 
 async function run(files){
   files = [...files].filter(f => /\.xls[xm]$/i.test(f.name) && !f.name.startsWith('~$')
@@ -138,7 +151,7 @@ async function run(files){
       if (!found) log.push(f.name + ': столбец не найден'); else { ok++; log.push(f.name + ': оценок ' + n); }
     } catch(e){ log.push(f.name + ': ' + e.message); }
   }
-  const classes = Object.keys(stats).sort((a,b)=>{const x=clsKey(a),y=clsKey(b);return x[0]-y[0]||x[1].localeCompare(y[1],'ru')});
+  const classes = Object.keys(stats).sort((a,b)=>{const x=clsKey(a),y=clsKey(b);return x[0]-y[0]||x[1].localeCompare(y[1],'ru')||x[2].localeCompare(y[2],'ru')});
   if (!classes.length){ $('#res').hidden = false; $('#total').textContent = 'Оценок не найдено';
     $('#tbl').innerHTML=''; $('#bDl').hidden = true; $('#log').textContent = log.join('\n'); return; }
   $('#bDl').hidden = false;
