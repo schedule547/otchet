@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Отчёт по оценкам</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<meta name="theme-color" content="#1f6f4a">
+<style>
+:root{--bg:#f4f6f5;--card:#fff;--tx:#1b2420;--mut:#5d6b64;--ac:#1f6f4a;--bd:#d5ddd9}
+@media(prefers-color-scheme:dark){:root{--bg:#161b19;--card:#212825;--tx:#e8eeea;--mut:#9aa8a0;--ac:#3fa774;--bd:#35403b}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.5 system-ui,Arial,sans-serif;background:var(--bg);color:var(--tx)}
+main{max-width:720px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:22px;margin:0 0 4px}
+.sub{color:var(--mut);margin:0 0 16px;font-size:14px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px;margin-bottom:14px}
+label{display:block;font-size:14px;color:var(--mut);margin-bottom:4px}
+input[type=text]{width:100%;padding:9px 10px;font:inherit;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx)}
+.drop{border:2px dashed var(--bd);border-radius:12px;padding:26px 12px;text-align:center;color:var(--mut)}
+.drop.over{border-color:var(--ac);background:rgba(31,111,74,.08)}
+.row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:10px}
+button{font:inherit;padding:9px 14px;border-radius:8px;border:1px solid var(--ac);background:var(--ac);color:#fff;cursor:pointer}
+button.sec{background:transparent;color:var(--ac)}
+table{border-collapse:collapse;width:100%;margin-top:8px}
+th,td{border:1px solid var(--bd);padding:6px 10px;text-align:center}
+th:first-child,td:first-child{text-align:left}
+.wrap{overflow-x:auto}
+#log{font-size:13px;color:var(--mut);white-space:pre-wrap;margin-top:8px}
+#total{font-weight:600;font-size:18px}
+.note{font-size:13px;color:var(--mut)}
+</style>
+</head>
+<body>
+<main>
+<h1>Отчёт по оценкам</h1>
+<p class="sub">Файлы обрабатываются прямо в браузере и никуда не отправляются.</p>
+
+<div class="card">
+  <label for="pat">Заголовок столбца (точки подряд = любой текст)</label>
+  <input type="text" id="pat" value="23 ..... 1Чт">
+</div>
+
+<div class="card">
+  <div class="drop" id="drop">Перетащите сюда файлы выписок (.xlsx)
+    <div class="row">
+      <button id="bFiles">Выбрать файлы</button>
+      <button id="bDir" class="sec">Выбрать папку</button>
+    </div>
+  </div>
+  <input type="file" id="fFiles" accept=".xlsx,.xlsm" multiple hidden>
+  <input type="file" id="fDir" webkitdirectory multiple hidden>
+  <p class="note" style="margin:12px 0 4px">Шаблон отчёта (необязательно): если выбрать «шаблон.xlsx», оформление возьмётся из него.</p>
+  <input type="file" id="fTpl" accept=".xlsx">
+</div>
+
+<div class="card" id="res" hidden>
+  <div id="total"></div>
+  <div class="wrap"><table id="tbl"></table></div>
+  <div class="row" style="justify-content:flex-start"><button id="bDl">Скачать Отчёт.xlsx</button></div>
+  <div id="log"></div>
+</div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const HEADER_ROWS = 15, FIRST_COL = 3;
+const KEYS = ['5','4','3','2','НА'];
+const LABELS = {'5':'на "5"','4':'на "4"','3':'на "3"','2':'на "2"','НА':'Неаттестест.'};
+let reportBlob = null;
+
+try { $('#pat').value = localStorage.getItem('pat') || $('#pat').value; } catch(e){}
+$('#pat').addEventListener('change', () => { try { localStorage.setItem('pat', $('#pat').value); } catch(e){} });
+
+const norm = v => String(v).replace(/\s+/g,' ').trim();
+function cellVal(c){
+  let v = c.value;
+  if (v && typeof v === 'object'){
+    if ('result' in v) v = v.result;
+    else if (v.richText) v = v.richText.map(t=>t.text).join('');
+    else if (v.text) v = v.text;
+    else return null;
+  }
+  return v ?? null;
+}
+function headerRe(p){
+  const parts = norm(p).split(/\.{2,}|…+/).map(s=>s.trim()).filter(Boolean)
+    .map(s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
+  return new RegExp('^\\s*' + parts.join('.*') + '\\s*$', 'i');
+}
+function classOf(name){
+  const toks = name.replace(/\.xls[xm]?$/i,'').split('+');
+  for (const t of toks.slice(1)){
+    const m = t.split('_')[0].match(/^\s*(\d{1,2})\s*([A-Za-zА-Яа-яЁё])(?![A-Za-zА-Яа-яЁё0-9])/);
+    if (m) return m[1] + m[2].toUpperCase();
+  }
+  return null;
+}
+function grade(v){
+  if (v == null) return null;
+  if (typeof v === 'number') return [2,3,4,5].includes(v) ? String(v) : null;
+  const t = norm(v).toUpperCase().replace(/\.$/,'');
+  if (['2','3','4','5'].includes(t)) return t;
+  if (t === 'НАН' || t === 'НАУ') return 'НА';
+  return null;
+}
+const clsKey = n => { const m = n.match(/^(\d+)(.*)$/); return m ? [+m[1], m[2]] : [999, n]; };
+
+async function run(files){
+  files = [...files].filter(f => /\.xls[xm]$/i.test(f.name) && !f.name.startsWith('~$')
+    && !/^(шаблон|отчёт)/i.test(f.name));
+  if (!files.length){ alert('Нет подходящих .xlsx файлов'); return; }
+  const re = headerRe($('#pat').value);
+  const stats = {}; let total = 0, ok = 0; const log = [];
+  for (const f of files){
+    try{
+      const cls = classOf(f.name);
+      if (!cls) throw new Error('не удалось определить класс по имени файла');
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(await f.arrayBuffer());
+      let n = 0, found = false;
+      wb.eachSheet(ws => {
+        for (let r = 1; r <= Math.min(HEADER_ROWS, ws.rowCount); r++){
+          for (let c = 1; c <= ws.columnCount; c++){
+            const v = cellVal(ws.getCell(r, c));
+            if (v == null || !re.test(norm(v))) continue;
+            found = true;
+            for (let i = r + 1; i <= ws.rowCount; i++){
+              const g = grade(cellVal(ws.getCell(i, c)));
+              if (g){ (stats[cls] ??= {}); stats[cls][g] = (stats[cls][g]||0) + 1; n++; }
+            }
+          }
+        }
+      });
+      total += n;
+      if (!found) log.push(f.name + ': столбец не найден'); else { ok++; log.push(f.name + ': оценок ' + n); }
+    } catch(e){ log.push(f.name + ': ' + e.message); }
+  }
+  const classes = Object.keys(stats).sort((a,b)=>{const x=clsKey(a),y=clsKey(b);return x[0]-y[0]||x[1].localeCompare(y[1],'ru')});
+  if (!classes.length){ $('#res').hidden = false; $('#total').textContent = 'Оценок не найдено';
+    $('#tbl').innerHTML=''; $('#bDl').hidden = true; $('#log').textContent = log.join('\n'); return; }
+  $('#bDl').hidden = false;
+
+  // таблица на странице
+  $('#tbl').innerHTML = '<tr><th>Класс</th>' + classes.map(c=>`<th>${c}</th>`).join('') + '</tr>' +
+    KEYS.map(k=>`<tr><td>${LABELS[k]}</td>` + classes.map(c=>`<td>${stats[c][k]||0}</td>`).join('') + '</tr>').join('');
+  $('#total').textContent = `Проверено оценок: ${total} (файлов: ${ok} из ${files.length})`;
+  $('#log').textContent = log.join('\n');
+  $('#res').hidden = false;
+
+  reportBlob = await buildReport(classes, stats);
+}
+
+async function buildReport(classes, stats){
+  const wb = new ExcelJS.Workbook(); let ws, tpl = $('#fTpl').files[0];
+  if (tpl){ await wb.xlsx.load(await tpl.arrayBuffer()); ws = wb.worksheets[0]; }
+  else {
+    ws = wb.addWorksheet('Лист1');
+    ws.getCell(1,1).value = 'Класс';
+    KEYS.forEach((k,i)=> ws.getCell(i+2,1).value = LABELS[k]);
+    ws.getColumn(1).width = 16;
+  }
+  const sample = {};
+  for (let r = 1; r <= 6; r++) sample[r] = JSON.parse(JSON.stringify(ws.getCell(r, FIRST_COL).style || {}));
+  const last = Math.max(ws.columnCount, FIRST_COL + classes.length - 1);
+  for (let c = FIRST_COL; c <= last; c++) for (let r = 1; r <= 6; r++) ws.getCell(r,c).value = null;
+  classes.forEach((cls, i) => {
+    const c = FIRST_COL + i;
+    for (let r = 1; r <= 6; r++){
+      const cell = ws.getCell(r, c);
+      cell.style = Object.keys(sample[r]).length ? sample[r] : {alignment:{horizontal:'center'},
+        border:{top:{style:'thin'},left:{style:'thin'},bottom:{style:'thin'},right:{style:'thin'}}};
+    }
+    ws.getCell(1,c).value = cls;
+    KEYS.forEach((k,j)=> ws.getCell(j+2,c).value = stats[cls][k] || 0);
+  });
+  const buf = await wb.xlsx.writeBuffer();
+  return new Blob([buf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+}
+
+$('#bDl').addEventListener('click', () => {
+  if (!reportBlob) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(reportBlob); a.download = 'Отчёт.xlsx'; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+});
+$('#bFiles').onclick = () => $('#fFiles').click();
+$('#bDir').onclick = () => $('#fDir').click();
+$('#fFiles').onchange = e => run(e.target.files);
+$('#fDir').onchange = e => run(e.target.files);
+const drop = $('#drop');
+['dragenter','dragover'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave','drop'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => run(e.dataTransfer.files));
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script>
+</body>
+</html>
